@@ -49,7 +49,11 @@ def isUncountable(word):
 			'prop':'categories', 'titles':word}
 	r = requests.get(url, params=query)
 	if not r: return False # assume countable
-	return 'English uncountable nouns' in str(r.json())
+	if 'English uncountable nouns' in str(r.json()):
+		return True # words that are uncountable
+	if 'English pluralia tantum' in str(r.json()):
+		return True # words that are always plural
+	return False
 
 def getHypernyms(wordnik, word):
 	# get hypernyms for the given word
