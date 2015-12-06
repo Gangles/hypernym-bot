@@ -1,5 +1,7 @@
 #!/usr/bin/python
 
+bot_name = 'blah'
+
 # API keys
 wordnik_key = 'blah'
 

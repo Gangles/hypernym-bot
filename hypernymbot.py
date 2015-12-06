@@ -7,29 +7,33 @@ import datetime
 import logging
 import random
 import requests
+import re
 import sys
 import time
 from twython import Twython
 from wordnik import *
 
-def getRandomWords(wordnik):
-    # get a list of random words from the wordnik API
-    random = WordsApi.WordsApi(wordnik).getRandomWords(
-    	includePartOfSpeech='noun',
-    	minCorpusCount=1000,
-        minDictionaryCount=10,
-        hasDictionaryDef='true',
-        maxLength=10)
-    
-    assert random and len(random) > 0, "Wordnik API error"
-    
-    # filter out offensive words
-    wordList=[]
-    for r in random:
-        if not blacklist.isOffensive(r.word):
-            wordList.append(r.word)
-    
-    return wordList
+def getRandomWords(wordnik, recent):
+	# get a list of random words from the wordnik API
+	random = WordsApi.WordsApi(wordnik).getRandomWords(
+		includePartOfSpeech='noun',
+		minCorpusCount=1000,
+		minDictionaryCount=10,
+		hasDictionaryDef='true',
+		maxLength=10)
+	
+	assert random and len(random) > 0, "Wordnik API error"
+	
+	# filter out offensive words
+	wordList=[]
+	for r in random:
+		if blacklist.isOffensive(r.word):
+			continue
+		if any(r.word in s for s in recent):
+			continue
+		wordList.append(r.word)
+	
+	return wordList
 
 def isNoun(wordnik, word):
 	# check if the given word is a noun
@@ -55,7 +59,7 @@ def isUncountable(word):
 		return True # words that are always plural
 	return False
 
-def getHypernyms(wordnik, word):
+def getHypernyms(wordnik, recent, word):
 	# get hypernyms for the given word
 	query = WordApi.WordApi(wordnik).getRelatedWords(
 		word = word, relationshipTypes = 'hypernym')
@@ -64,20 +68,35 @@ def getHypernyms(wordnik, word):
 		return hypernyms
 	for q in query:
 		for hyp in q.words:
-			if hyp not in word and not blacklist.isOffensive(hyp):
-				if isNoun(wordnik, hyp):
-					hypernyms.append(hyp)
+			if hyp in word or word in hyp:
+				continue
+			if any(hyp in s for s in recent):
+				continue
+			if blacklist.isOffensive(hyp):
+				continue
+			if not isNoun(wordnik, hyp):
+				continue
+			hypernyms.append(hyp)
 	return hypernyms
 
 def connect_twitter():
-    # connect to twitter API
-    return Twython(config.twitter_key, config.twitter_secret,
-    			config.access_token, config.access_secret)
+	# connect to twitter API
+	return Twython(config.twitter_key, config.twitter_secret,
+				config.access_token, config.access_secret)
+
+def getRecentWords(twitter):
+	# find recently used words, so we can avoid re-using them
+	recentWords = []
+	pattern = re.compile(r"For the want of [an? ]*([\w\s]+),")
+	timeline = twitter.get_user_timeline(screen_name = config.bot_name)
+	for tweet in timeline:
+		recentWords.extend(pattern.findall(tweet['text']))
+	return recentWords
 
 def postTweet(twitter, to_tweet):
-    # post the given tweet
-    print "Posting tweet: " + to_tweet.encode('ascii', 'ignore')
-    twitter.update_status(status=to_tweet)
+	# post the given tweet
+	print "Posting tweet: " + to_tweet.encode('ascii', 'ignore')
+	twitter.update_status(status=to_tweet)
 
 def getArticle(word, approx=False):
 	# preceded by 'a' or 'an'?
@@ -98,20 +117,20 @@ def tweetLength(first, second, third, fourth=None):
 		length += len(fourth)
 	return length
 
-def assembleTweet():
+def assembleTweet(recent):
 	wordnik = swagger.ApiClient(config.wordnik_key, 'http://api.wordnik.com/v4')
-	firstList = getRandomWords(wordnik)
+	firstList = getRandomWords(wordnik, recent)
 	first, second, third, fourth = (None, None, None, None)
 
 	while not first and len(firstList) > 0:
 		# choose a random first word, find its hypernyms
 		first = firstList.pop()
-		secondList = getHypernyms(wordnik, first)
+		secondList = getHypernyms(wordnik, recent, first)
 		random.shuffle(secondList)
 		while not second and len(secondList) > 0:
 			# choose a second word, find its hypernyms
 			second = secondList.pop()
-			thirdList = getHypernyms(wordnik, second)
+			thirdList = getHypernyms(wordnik, recent, second)
 			random.shuffle(thirdList)
 			while not third and len(thirdList) > 0:
 				# choose a third word...
@@ -121,7 +140,7 @@ def assembleTweet():
 					third = None
 					continue
 				# try to find a fourth word that will fit
-				fourthList = getHypernyms(wordnik, third)
+				fourthList = getHypernyms(wordnik, recent, third)
 				random.shuffle(fourthList)
 				while not fourth and len(fourthList) > 0:
 					fourth = fourthList.pop()
@@ -145,12 +164,12 @@ def assembleTweet():
 	return toTweet
 
 def timeToWait():
-    # tweet every 4 hours, offset by 2 hours
-    now = datetime.datetime.now()
-    wait = 60 - now.second
-    wait += (59 - now.minute) * 60
-    wait += (3 - ((now.hour + 2) % 4)) * 3600
-    return wait
+	# tweet every 4 hours, offset by 2 hours
+	now = datetime.datetime.now()
+	wait = 60 - now.second
+	wait += (59 - now.minute) * 60
+	wait += (3 - ((now.hour + 2) % 4)) * 3600
+	return wait
 
 if __name__ == "__main__":
 	# heroku scheduler runs every 10 minutes
@@ -159,9 +178,10 @@ if __name__ == "__main__":
 	if wait < 5 or wait > 595: sys.exit(0)
 	
 	try:
-		tweet = assembleTweet()
-		time.sleep(wait)
 		twitter = connect_twitter()
+		recent = getRecentWords(twitter)
+		tweet = assembleTweet(recent)
+		time.sleep(wait)
 		postTweet(twitter, tweet)
 		sys.exit(0)
 	except SystemExit as e:
