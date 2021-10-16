@@ -95,7 +95,7 @@ def getRecentWords(twitter):
 
 def postTweet(twitter, to_tweet):
 	# post the given tweet
-	print "Posting tweet: " + to_tweet.encode('ascii', 'ignore')
+	print("Posting tweet: " + to_tweet.encode('ascii', 'ignore'))
 	twitter.update_status(status=to_tweet)
 
 def getArticle(word, approx=False):
@@ -174,7 +174,7 @@ def timeToWait():
 if __name__ == "__main__":
 	# heroku scheduler runs every 10 minutes
 	wait = timeToWait()
-	print "Wait " + str(wait) + " seconds for next tweet"
+	print("Wait " + str(wait) + " seconds for next tweet")
 	if wait < 5 or wait > 595: sys.exit(0)
 	
 	try:
